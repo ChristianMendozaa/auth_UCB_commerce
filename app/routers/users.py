@@ -23,13 +23,28 @@ def _primary_role(roles: List[str]) -> str:
 @router.get("/me", response_model=MeResponse)
 def me(current=Depends(get_current_user)):
     uid = current["uid"]
+
+    # Perfil legado (puede traer 'career' simple)
     prof = current.get("profile") or get_profile(uid) or {}
-    roles_doc = get_roles(uid)
+
+    # Doc de roles en colección 'roles'
+    roles_doc = get_roles(uid) or {}
     roles = roles_doc.get("roles") or ["student"]
     admin_careers = roles_doc.get("admin_careers") or []
+    platform_admin = bool(roles_doc.get("platform_admin"))
 
+    # Rol primario
     role = _primary_role(roles)
     is_admin = ("admin" in roles)
+
+    # careers (array): unimos admin_careers + career legado (si existe) y quitamos duplicados
+    legacy_career = prof.get("career")
+    careers_raw = list(admin_careers)  # copia
+    if legacy_career:
+        careers_raw.append(legacy_career)
+    # deduplicar manteniendo orden
+    seen = set()
+    careers = [c for c in careers_raw if (c and not (c in seen or seen.add(c)))]
 
     return {
         "uid": uid,
@@ -37,10 +52,15 @@ def me(current=Depends(get_current_user)):
         "displayName": current.get("displayName"),
         "photoURL": current.get("photoURL"),
         "profile": prof,
-        "role": role,                 # primario, ej. 'admin' o 'student'
+
+        "role": role,
         "is_admin": is_admin,
-        "roles": roles,               # lista completa
-        "admin_careers": admin_careers,
+        "roles": roles,
+
+        # NUEVOS/EXPUESTOS
+        "careers": careers,                 # 👈 ahora llega como array
+        "admin_careers": admin_careers,     # se mantiene
+        "platform_admin": platform_admin,    # útil en el front
     }
 
 @router.get("/me/profile")

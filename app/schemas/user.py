@@ -13,14 +13,21 @@ RoleLiteral = Literal["student", "teacher", "admin"]
 
 class MeResponse(BaseModel):
     uid: str
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     displayName: Optional[str] = None
     photoURL: Optional[str] = None
+
+    # perfil legado (podría contener career simple)
     profile: Optional[dict] = None
 
-    # 🔽 nuevos campos que tu endpoint ya está devolviendo
-    role: Optional[RoleLiteral] = "student"           # rol primario
-    is_admin: bool = False
-    roles: List[RoleLiteral] = []
-    admin_careers: List[str] = []
+    # roles
+    role: str                   # primario: "admin" o "student"
+    roles: List[str]            # lista completa
+    is_admin: bool
+
+    # carreras (nuevas)
+    careers: List[str] = []     # <-- NUEVO: todas las carreras a las que pertenece
+    admin_careers: List[str] = []  # ya existía pero lo dejamos explícito
+
+    # opcional: superadmin
     platform_admin: bool = False
