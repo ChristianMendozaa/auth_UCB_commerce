@@ -10,6 +10,7 @@ from app.config import (
 from app.schemas.auth import EmailRegister, EmailLogin, RefreshRequest, GoogleIdpLogin
 from app.schemas.user import LoginWithIdToken
 from app.services.users_service import best_effort_materialize
+from app.services.roles_service import ensure_default_student
 import logging
 
 logger = logging.getLogger(__name__)
@@ -114,8 +115,10 @@ async def google_login_or_register(body: GoogleIdpLogin, response: Response):
     }
     try:
         best_effort_materialize(uid, base_profile)
+        # ✅ Rol por defecto en colección `roles`
+        ensure_default_student(uid)
     except Exception as e:
-        logger.warning("best_effort_materialize falló (continuo): %s", e)
+        logger.warning("best_effort_materialize/ensure_default_student falló (continuo): %s", e)
 
     return {"ok": True, "uid": uid, "expiresAt": expires_at.isoformat()}
 

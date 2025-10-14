@@ -1,27 +1,46 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Dict
+from app.schemas.roles import MakeAdminBody, RemoveAdminBody
+from fastapi import APIRouter, Depends, HTTPException, status
 from firebase_admin import auth as fb_auth
+
 from app.deps.auth import get_current_user
 from app.schemas.user import MeResponse, UpdateProfile
 from app.services.users_service import upsert_profile, get_profile, delete_profile
+from app.services.roles_service import get_roles, add_admin_for_career, can_manage_career, is_platform_admin, remove_admin_for_career
+from app.core.firebase import firestore_db
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-# users router (añade/ajusta en /users/me)
+# ====== HELPERS ======
+def _primary_role(roles: List[str]) -> str:
+    # Si es admin, mostrarlo como rol primario
+    if "admin" in roles:
+        return "admin"
+    return "student"
+
+# ====== ENDPOINTS ======
+
 @router.get("/me", response_model=MeResponse)
 def me(current=Depends(get_current_user)):
-    prof = current.get("profile") or {}
-    # Fuente de verdad: DB profile.role (o 'student' por defecto)
-    role = prof.get("role", "student")
-    is_admin = (role == "admin")
+    uid = current["uid"]
+    prof = current.get("profile") or get_profile(uid) or {}
+    roles_doc = get_roles(uid)
+    roles = roles_doc.get("roles") or ["student"]
+    admin_careers = roles_doc.get("admin_careers") or []
+
+    role = _primary_role(roles)
+    is_admin = ("admin" in roles)
 
     return {
-        "uid": current["uid"],
+        "uid": uid,
         "email": current.get("email"),
         "displayName": current.get("displayName"),
         "photoURL": current.get("photoURL"),
         "profile": prof,
-        "role": role,          # <-- nuevo
-        "is_admin": is_admin,  # <-- nuevo
+        "role": role,                 # primario, ej. 'admin' o 'student'
+        "is_admin": is_admin,
+        "roles": roles,               # lista completa
+        "admin_careers": admin_careers,
     }
 
 @router.get("/me/profile")
@@ -46,6 +65,91 @@ def delete_my_account(current=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=f"No se pudo borrar el usuario en Auth: {e}")
     try:
         delete_profile(uid)
+        # Opcional: también podrías borrar su doc en `roles`
+        # firestore_db.collection("roles").document(uid).delete()
     except Exception:
         pass
     return {"ok": True}
+
+# ========= NUEVOS ENDPOINTS DE ROLES =========
+
+@router.post("/roles/make_admin", status_code=status.HTTP_200_OK)
+def make_admin(body: MakeAdminBody, current=Depends(get_current_user)):
+    """
+    Asigna rol 'admin' al usuario `body.uid` para la carrera `body.career`.
+    Reglas:
+      - platform_admin puede asignar cualquier carrera.
+      - admin puede asignar SOLO carreras que él mismo administra.
+    """
+    requester_uid = current["uid"]
+    if not (is_platform_admin(requester_uid) or can_manage_career(requester_uid, body.career)):
+        raise HTTPException(status_code=403, detail="No tienes permisos para asignar admin en esta carrera.")
+
+    updated = add_admin_for_career(body.uid, body.career)
+    return {"ok": True, "roles": updated.get("roles"), "admin_careers": updated.get("admin_careers")}
+
+@router.get("", status_code=status.HTTP_200_OK)
+def list_users(current=Depends(get_current_user)):
+    """
+    Lista usuarios con perfil y roles. Requiere ser admin (de alguna carrera) o platform_admin.
+    """
+    requester_uid = current["uid"]
+    roles_doc = get_roles(requester_uid)
+    if not ("admin" in (roles_doc.get("roles") or []) or roles_doc.get("platform_admin")):
+        raise HTTPException(status_code=403, detail="No autorizado")
+
+    # Traer perfiles
+    users_ref = firestore_db.collection("users")
+    users_iter = users_ref.stream()
+    users: Dict[str, Dict] = {}
+    for doc in users_iter:
+        data = doc.to_dict() or {}
+        data["uid"] = doc.id
+        users[doc.id] = data
+
+    # Traer roles y hacer join por uid
+    roles_ref = firestore_db.collection("roles")
+    roles_iter = roles_ref.stream()
+    roles_map: Dict[str, Dict] = {doc.id: (doc.to_dict() or {}) for doc in roles_iter}
+
+    # Combinar
+    results: List[Dict] = []
+    for uid, prof in users.items():
+        rdoc = roles_map.get(uid, {"roles": ["student"], "admin_careers": []})
+        roles = rdoc.get("roles") or ["student"]
+        results.append({
+            "uid": uid,
+            "email": prof.get("email"),
+            "displayName": prof.get("displayName"),
+            "photoURL": prof.get("photoURL"),
+            "profile": prof,
+            "roles": roles,
+            "role": "admin" if "admin" in roles else "student",
+            "admin_careers": rdoc.get("admin_careers") or [],
+            "platform_admin": bool(rdoc.get("platform_admin")),
+        })
+
+    # (Opcional) Filtros por carrera que administra el solicitante (si no es platform_admin)
+    if not roles_doc.get("platform_admin"):
+        allowed = set(roles_doc.get("admin_careers") or [])
+        # Un admin puede ver:
+        #  - a otros admins que compartan al menos una carrera
+        #  - a todos los students (si lo prefieres, puedes restringir más)
+        filtered = []
+        for u in results:
+            if "admin" in u["roles"]:
+                if allowed.intersection(set(u.get("admin_careers") or [])):
+                    filtered.append(u)
+            else:
+                filtered.append(u)
+        results = filtered
+
+    return {"ok": True, "count": len(results), "users": results}
+
+@router.post("/roles/remove_admin", status_code=status.HTTP_200_OK)
+def remove_admin(body: RemoveAdminBody, current=Depends(get_current_user)):
+    requester_uid = current["uid"]
+    if not (is_platform_admin(requester_uid) or can_manage_career(requester_uid, body.career)):
+        raise HTTPException(status_code=403, detail="No tienes permisos para quitar admin en esta carrera.")
+    updated = remove_admin_for_career(body.uid, body.career)
+    return {"ok": True, "roles": updated.get("roles"), "admin_careers": updated.get("admin_careers")}
