@@ -11,6 +11,13 @@ class CareerBody(BaseModel):
     code: str
     name: Optional[str] = None
 
+@router.get("/public", status_code=status.HTTP_200_OK, tags=["public"])
+def public_careers_index():
+    """
+    Lista todas las carreras de forma pública (sin autenticación).
+    """
+    return {"ok": True, "careers": list_careers()}
+
 @router.get("", status_code=status.HTTP_200_OK)
 def careers_index(current=Depends(get_current_user)):
     """
