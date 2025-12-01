@@ -1,12 +1,12 @@
 from typing import List, Dict
-from app.schemas.roles import MakeAdminBody, RemoveAdminBody
+from app.schemas.roles import MakeAdminBody, RemoveAdminBody, MakePlatformAdminBody, RemovePlatformAdminBody
 from fastapi import APIRouter, Depends, HTTPException, status
 from firebase_admin import auth as fb_auth
 
 from app.deps.auth import get_current_user
 from app.schemas.user import MeResponse, UpdateProfile
 from app.services.users_service import upsert_profile, get_profile, delete_profile
-from app.services.roles_service import get_roles, add_admin_for_career, can_manage_career, is_platform_admin, remove_admin_for_career
+from app.services.roles_service import get_roles, add_admin_for_career, can_manage_career, is_platform_admin, remove_admin_for_career, make_platform_admin, remove_platform_admin
 from app.core.firebase import firestore_db
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -173,3 +173,29 @@ def remove_admin(body: RemoveAdminBody, current=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="No tienes permisos para quitar admin en esta carrera.")
     updated = remove_admin_for_career(body.uid, body.career)
     return {"ok": True, "roles": updated.get("roles"), "admin_careers": updated.get("admin_careers")}
+
+@router.post("/roles/make_platform_admin", status_code=status.HTTP_200_OK)
+def make_platform_admin_endpoint(body: MakePlatformAdminBody, current=Depends(get_current_user)):
+    """
+    Convierte a un usuario en Platform Admin.
+    Requiere ser Platform Admin.
+    """
+    requester_uid = current["uid"]
+    if not is_platform_admin(requester_uid):
+        raise HTTPException(status_code=403, detail="Requiere ser Platform Admin.")
+    
+    updated = make_platform_admin(body.uid)
+    return {"ok": True, "platform_admin": updated.get("platform_admin")}
+
+@router.post("/roles/remove_platform_admin", status_code=status.HTTP_200_OK)
+def remove_platform_admin_endpoint(body: RemovePlatformAdminBody, current=Depends(get_current_user)):
+    """
+    Quita el rol de Platform Admin.
+    Requiere ser Platform Admin.
+    """
+    requester_uid = current["uid"]
+    if not is_platform_admin(requester_uid):
+        raise HTTPException(status_code=403, detail="Requiere ser Platform Admin.")
+    
+    updated = remove_platform_admin(body.uid)
+    return {"ok": True, "platform_admin": updated.get("platform_admin")}

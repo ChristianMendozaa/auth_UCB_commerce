@@ -168,3 +168,67 @@ def remove_admin_all_careers(target_uid: str) -> Dict:
     ref.set(update, merge=True)
     data.update(update)
     return data
+
+def make_platform_admin(target_uid: str) -> Dict:
+    """
+    Convierte al usuario en Platform Admin.
+    """
+    ref = firestore_db.collection(ROLES_COLL).document(target_uid)
+    snap = ref.get()
+    
+    if not snap.exists:
+        data = {
+            "uid": target_uid,
+            "roles": ["student"],
+            "admin_careers": [],
+            "platform_admin": True,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
+        ref.set(data)
+        return data
+
+    data = snap.to_dict() or {}
+    # Aseguramos student por si acaso
+    roles = list(set((data.get("roles") or []) + ["student"]))
+    
+    update = {
+        "platform_admin": True,
+        "roles": roles,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    ref.set(update, merge=True)
+    data.update(update)
+    return data
+
+def remove_platform_admin(target_uid: str) -> Dict:
+    """
+    Quita el privilegio de Platform Admin.
+    Si el usuario no tiene carreras administradas, se le quita el rol 'admin'
+    para asegurar que vuelva a ser 'student'.
+    """
+    ref = firestore_db.collection(ROLES_COLL).document(target_uid)
+    snap = ref.get()
+    
+    if not snap.exists:
+        return ensure_default_student(target_uid)
+
+    data = snap.to_dict() or {}
+    roles = list(data.get("roles") or [])
+    admin_careers = list(data.get("admin_careers") or [])
+
+    # Si no tiene carreras administradas, quitar 'admin'
+    if not admin_careers and "admin" in roles:
+        roles = [r for r in roles if r != "admin"]
+    
+    # Asegurar 'student'
+    if "student" not in roles:
+        roles.append("student")
+
+    update = {
+        "platform_admin": False,
+        "roles": sorted(set(roles)),
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    ref.set(update, merge=True)
+    data.update(update)
+    return data
